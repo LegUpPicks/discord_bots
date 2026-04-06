@@ -108,6 +108,12 @@ SCAN_SUSPICIOUS_KEYWORDS = {
     "nft", "invest", "profit", "winner", "money", "cash", "promo",
 }
 
+# Impersonation patterns — matches variations of the server owner's name
+IMPERSONATION_PATTERN = re.compile(
+    r'romano|chee+z(up)?|chee+zup',
+    re.IGNORECASE
+)
+
 # ─── Strike Tracking (in-memory, resets on bot restart) ───────────────────────
 strikes: dict[int, int] = {}
 
@@ -253,6 +259,10 @@ def get_suspicion_flags(member: discord.Member) -> list[str]:
     if matched_kw:
         flags.append(f"🔤 Suspicious username keywords: {', '.join(matched_kw)}")
 
+    full_name = f"{member.name} {member.display_name}"
+    if IMPERSONATION_PATTERN.search(full_name):
+        flags.append(f"🚨 Possible impersonation (name resembles server owner)")
+
     return flags
 
 
@@ -274,7 +284,10 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
     suspicious = [(m, get_suspicion_flags(m)) for m in social_members]
     suspicious = [
         (m, flags) for m, flags in suspicious
-        if any("New account" in f for f in flags) and any("Joined recently" in f for f in flags)
+        if (
+            (any("New account" in f for f in flags) and any("Joined recently" in f for f in flags))
+            or any("impersonation" in f for f in flags)
+        )
     ]
 
     now_et = datetime.now(ET).strftime("%b %d, %Y %I:%M %p ET")
