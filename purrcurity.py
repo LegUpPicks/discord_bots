@@ -332,19 +332,6 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
     csv_file = discord.File(fp=io.BytesIO(buf.getvalue().encode()), filename=filename)
     await log_channel.send(f"📎 **{len(suspicious)} flagged member(s)** — full report attached:", file=csv_file)
 
-    # Also post embeds in chunks for quick in-channel review
-    chunk_size = 10
-    for i in range(0, len(suspicious), chunk_size):
-        chunk = suspicious[i:i + chunk_size]
-        embed = discord.Embed(color=discord.Color.orange())
-        for member, flags in chunk:
-            embed.add_field(
-                name=f"{member.display_name} ({member})",
-                value="\n".join(flags) + f"\n`ID: {member.id}`",
-                inline=False,
-            )
-        await log_channel.send(embed=embed)
-
 
 # ─── Scheduled Scan Task ──────────────────────────────────────────────────────
 
