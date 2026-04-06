@@ -271,7 +271,7 @@ KICK_DM_MESSAGE = (
 )
 
 
-async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled", kick: bool = False) -> None:
+async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> None:
     """Scans all Social role members and posts a report to #security-management."""
     log_channel = get_mod_log_channel(guild)
     if not log_channel:
@@ -339,22 +339,21 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled", kick: 
     csv_file = discord.File(fp=io.BytesIO(buf.getvalue().encode()), filename=filename)
     await log_channel.send(f"📎 **{len(suspicious)} flagged member(s)** — full report attached:", file=csv_file)
 
-    if kick:
-        kicked, failed = 0, 0
-        for member, _ in suspicious:
-            try:
-                await member.send(KICK_DM_MESSAGE)
-            except (discord.Forbidden, discord.HTTPException):
-                pass  # DMs disabled — still kick
-            try:
-                await member.kick(reason="PurrCurity: suspicious activity or account age")
-                kicked += 1
-            except (discord.Forbidden, discord.HTTPException):
-                failed += 1
-        summary = f"✅ Kicked **{kicked}** member(s)."
-        if failed:
-            summary += f" ❌ Failed to kick **{failed}** (check bot role hierarchy)."
-        await log_channel.send(summary)
+    kicked, failed = 0, 0
+    for member, _ in suspicious:
+        try:
+            await member.send(KICK_DM_MESSAGE)
+        except (discord.Forbidden, discord.HTTPException):
+            pass  # DMs disabled — still kick
+        try:
+            await member.kick(reason="PurrCurity: suspicious activity or account age")
+            kicked += 1
+        except (discord.Forbidden, discord.HTTPException):
+            failed += 1
+    summary = f"✅ Kicked **{kicked}** member(s)."
+    if failed:
+        summary += f" ❌ Failed to kick **{failed}** (check bot role hierarchy)."
+    await log_channel.send(summary)
 
 
 # ─── Scheduled Scan Task ──────────────────────────────────────────────────────
@@ -512,13 +511,11 @@ async def purrclearstrikes(interaction: discord.Interaction, member: discord.Mem
         f"PurrCurity: Strikes cleared for {member.mention}. 🐾", ephemeral=True
     )
 
-@bot.tree.command(name="purrscan", description="Scan Social role members for suspicious activity and post report to security-management.")
-@app_commands.describe(kick="Kick all flagged members after generating the report (default: False)")
+@bot.tree.command(name="purrscan", description="Scan Social role members, post CSV report, and kick flagged members.")
 @app_commands.default_permissions(administrator=True)
-async def purrscan(interaction: discord.Interaction, kick: bool = False):
-    action = "Scanning and kicking" if kick else "Scanning"
-    await interaction.response.send_message(f"PurrCurity: {action} Social members... report will appear in #security-management. 🐾", ephemeral=True)
-    await run_scan(interaction.guild, triggered_by=f"Manual scan by {interaction.user}", kick=kick)
+async def purrscan(interaction: discord.Interaction):
+    await interaction.response.send_message("PurrCurity: Scanning and kicking Social members... report will appear in #security-management. 🐾", ephemeral=True)
+    await run_scan(interaction.guild, triggered_by=f"Manual scan by {interaction.user}")
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
