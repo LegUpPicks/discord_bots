@@ -1,0 +1,14 @@
+# fly-panthers.toml — Panthers Bot
+
+app = 'panthers-bot'
+primary_region = 'ord'
+
+[build]
+
+[processes]
+  worker = "python panthers.py"
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1

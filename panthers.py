@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 # Load the token from the .env file
 load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
+TOKEN = os.getenv('PANTHERS_TOKEN') or os.getenv('DISCORD_TOKEN')
 
 # Bot Setup
 intents = discord.Intents.default()
@@ -47,6 +47,12 @@ async def on_message(message):
     # --- EAGLES / GO BIRDS LOGIC ---
     elif "eagles" in msg_content or "go birds" in msg_content:
         await message.channel.send("Go birds")
+
+    # --- WOLVERINES / MICHIGAN LOGIC ---
+    elif "go uconn" in msg_content or "uconn" in msg_content:
+        await message.channel.send("Fuck you go Wolverines!")
+    elif "michigan sucks" in msg_content or "michigan stinks" in msg_content or "beat michigan" in msg_content or "fuck michigan" in msg_content:
+        await message.channel.send("Fuck you go Wolverines!")
 
     await bot.process_commands(message)
 
