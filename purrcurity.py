@@ -2,6 +2,8 @@
 
 import os
 import re
+import csv
+import io
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -291,7 +293,26 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
         await log_channel.send("✅ No suspicious Social members found.")
         return
 
-    # Post in chunks to stay under Discord's 25-field embed limit
+    # Build CSV in memory
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Username", "Display Name", "User ID", "Account Created", "Joined Server", "Flags"])
+    for member, flags in suspicious:
+        writer.writerow([
+            str(member),
+            member.display_name,
+            member.id,
+            member.created_at.strftime("%Y-%m-%d"),
+            member.joined_at.strftime("%Y-%m-%d") if member.joined_at else "Unknown",
+            " | ".join(flags),
+        ])
+
+    buf.seek(0)
+    filename = f"purrcurity_scan_{datetime.now(ET).strftime('%Y%m%d_%H%M')}.csv"
+    csv_file = discord.File(fp=io.BytesIO(buf.getvalue().encode()), filename=filename)
+    await log_channel.send(f"📎 **{len(suspicious)} flagged member(s)** — full report attached:", file=csv_file)
+
+    # Also post embeds in chunks for quick in-channel review
     chunk_size = 10
     for i in range(0, len(suspicious), chunk_size):
         chunk = suspicious[i:i + chunk_size]
@@ -299,7 +320,7 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
         for member, flags in chunk:
             embed.add_field(
                 name=f"{member.display_name} ({member})",
-                value="\n".join(flags) + f"\n[ID: {member.id}]",
+                value="\n".join(flags) + f"\n`ID: {member.id}`",
                 inline=False,
             )
         await log_channel.send(embed=embed)
