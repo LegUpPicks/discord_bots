@@ -1,0 +1,14 @@
+# fly.toml — PurrCurity Discord Bot
+
+app = 'purrcurity'
+primary_region = 'ord'
+
+[build]
+
+[processes]
+  worker = "python purrcurity.py"
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
