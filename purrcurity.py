@@ -95,9 +95,7 @@ ET = ZoneInfo("America/New_York")
 
 # Times to auto-post the Social member scan report (Eastern Time)
 SCAN_TIMES = [
-    time(hour=1,  minute=0, tzinfo=ET),
-    time(hour=8,  minute=0, tzinfo=ET),
-    time(hour=17, minute=0, tzinfo=ET),
+    time(hour=8, minute=0, tzinfo=ET),
 ]
 
 # Suspicious indicator thresholds for /purrscan
