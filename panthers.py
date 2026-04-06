@@ -66,10 +66,13 @@ async def on_message(message):
         await message.channel.send("Go birds")
 
     # --- WOLVERINES / MICHIGAN LOGIC ---
-    elif "michigan" in msg_content:
+    elif "michigan" in msg_content or "wolverines" in msg_content or "go blue" in msg_content:
         is_michigan_negative = any(word in msg_content for word in MICHIGAN_NEGATIVE)
+        is_michigan_positive = any(word in msg_content for word in UCONN_POSITIVE)
         if is_michigan_negative:
             await message.channel.send("Fuck you go Wolverines!")
+        elif is_michigan_positive or "go blue" in msg_content:
+            await message.channel.send("Go Blue!")
     elif "uconn" in msg_content or "huskies" in msg_content:
         is_uconn_positive = any(word in msg_content for word in UCONN_POSITIVE)
         if is_uconn_positive:
