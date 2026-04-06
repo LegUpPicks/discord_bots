@@ -4,9 +4,10 @@ import os
 import re
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 TOKEN = os.getenv('PURRCURITY_TOKEN') or os.getenv('DISCORD_TOKEN')
@@ -85,6 +86,25 @@ EMOJI_MAX = 8
 NEW_ACCOUNT_DAYS = 7    # Accounts newer than this are flagged in logs
 MAX_STRIKES = 3         # Violations before auto-timeout
 TIMEOUT_MINUTES = 60    # How long the auto-timeout lasts
+
+# ─── Scan Configuration ───────────────────────────────────────────────────────
+
+ET = ZoneInfo("America/New_York")
+
+# Times to auto-post the Social member scan report (Eastern Time)
+SCAN_TIMES = [
+    time(hour=1,  minute=0, tzinfo=ET),
+    time(hour=8,  minute=0, tzinfo=ET),
+    time(hour=17, minute=0, tzinfo=ET),
+]
+
+# Suspicious indicator thresholds for /purrscan
+SCAN_ACCOUNT_AGE_DAYS = 30   # Flag accounts newer than this
+SCAN_JOIN_AGE_DAYS    = 7    # Flag members who joined the server within this many days
+SCAN_SUSPICIOUS_KEYWORDS = {
+    "picks", "capper", "cappers", "tips", "tipster", "free", "crypto",
+    "nft", "invest", "profit", "winner", "money", "cash", "promo",
+}
 
 # ─── Strike Tracking (in-memory, resets on bot restart) ───────────────────────
 strikes: dict[int, int] = {}
@@ -210,6 +230,92 @@ async def post_mod_log(
     embed.set_footer(text=f"User ID: {member.id}")
     await log_channel.send(embed=embed)
 
+# ─── Scan Logic ───────────────────────────────────────────────────────────────
+
+def get_suspicion_flags(member: discord.Member) -> list[str]:
+    """Returns a list of suspicious indicators for a Social role member."""
+    flags = []
+    now = datetime.now(timezone.utc)
+
+    account_age = (now - member.created_at).days
+    if account_age < SCAN_ACCOUNT_AGE_DAYS:
+        flags.append(f"🆕 New account ({account_age}d old)")
+
+    if member.joined_at:
+        join_age = (now - member.joined_at).days
+        if join_age < SCAN_JOIN_AGE_DAYS:
+            flags.append(f"🚪 Joined recently ({join_age}d ago)")
+
+    if str(member.display_avatar) == str(member.default_avatar):
+        flags.append("🖼️ Default avatar (no profile picture)")
+
+    name_lower = member.name.lower()
+    matched_kw = [kw for kw in SCAN_SUSPICIOUS_KEYWORDS if kw in name_lower]
+    if matched_kw:
+        flags.append(f"🔤 Suspicious username keywords: {', '.join(matched_kw)}")
+
+    return flags
+
+
+async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> None:
+    """Scans all Social role members and posts a report to #security-management."""
+    log_channel = get_mod_log_channel(guild)
+    if not log_channel:
+        return
+
+    if not guild.chunked:
+        await guild.chunk()
+
+    social_role = discord.utils.get(guild.roles, name=SOCIAL_ROLE_NAME)
+    if not social_role:
+        await log_channel.send(f"⚠️ PurrCurity scan: Could not find a role named `{SOCIAL_ROLE_NAME}`.")
+        return
+
+    social_members = [m for m in guild.members if social_role in m.roles and not m.bot]
+    suspicious = [(m, get_suspicion_flags(m)) for m in social_members]
+    suspicious = [(m, flags) for m, flags in suspicious if flags]
+
+    now_et = datetime.now(ET).strftime("%b %d, %Y %I:%M %p ET")
+
+    header = discord.Embed(
+        title=f"PurrCurity — Social Member Scan 🐾",
+        description=(
+            f"**Triggered by:** {triggered_by}\n"
+            f"**Time:** {now_et}\n\n"
+            f"**Total Social members:** {len(social_members)}\n"
+            f"**Flagged as suspicious:** {len(suspicious)}"
+        ),
+        color=discord.Color.yellow() if suspicious else discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    await log_channel.send(embed=header)
+
+    if not suspicious:
+        await log_channel.send("✅ No suspicious Social members found.")
+        return
+
+    # Post in chunks to stay under Discord's 25-field embed limit
+    chunk_size = 10
+    for i in range(0, len(suspicious), chunk_size):
+        chunk = suspicious[i:i + chunk_size]
+        embed = discord.Embed(color=discord.Color.orange())
+        for member, flags in chunk:
+            embed.add_field(
+                name=f"{member.display_name} ({member})",
+                value="\n".join(flags) + f"\n[ID: {member.id}]",
+                inline=False,
+            )
+        await log_channel.send(embed=embed)
+
+
+# ─── Scheduled Scan Task ──────────────────────────────────────────────────────
+
+@tasks.loop(time=SCAN_TIMES)
+async def scheduled_scan():
+    for guild in bot.guilds:
+        await run_scan(guild, triggered_by="Scheduled auto-scan")
+
+
 # ─── Events ───────────────────────────────────────────────────────────────────
 
 @bot.event
@@ -218,6 +324,8 @@ async def on_ready():
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.watching, name="for spam 🐾")
     )
+    if not scheduled_scan.is_running():
+        scheduled_scan.start()
 
 
 @bot.event
@@ -354,6 +462,12 @@ async def purrclearstrikes(interaction: discord.Interaction, member: discord.Mem
     await interaction.response.send_message(
         f"PurrCurity: Strikes cleared for {member.mention}. 🐾", ephemeral=True
     )
+
+@bot.tree.command(name="purrscan", description="Scan Social role members for suspicious activity and post report to security-management.")
+@app_commands.default_permissions(manage_messages=True)
+async def purrscan(interaction: discord.Interaction):
+    await interaction.response.send_message("PurrCurity: Scanning Social members... report will appear in #security-management. 🐾", ephemeral=True)
+    await run_scan(interaction.guild, triggered_by=f"Manual scan by {interaction.user}")
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
