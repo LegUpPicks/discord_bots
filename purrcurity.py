@@ -267,7 +267,7 @@ def get_suspicion_flags(member: discord.Member) -> list[str]:
 KICK_DM_MESSAGE = (
     "Your account does not meet the criteria to join this server either for suspicious activity or account age. "
     "Please try to join once your discord account is of a more mature status, as always you can join premium "
-    "where there are no restrictions via Whop."
+    "where there are no restrictions via Whop: https://whop.com/c/leguppicks/discord"
 )
 
 
