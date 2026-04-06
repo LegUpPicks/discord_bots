@@ -266,7 +266,7 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
     if not guild.chunked:
         await guild.chunk()
 
-    social_role = discord.utils.get(guild.roles, name=SOCIAL_ROLE_NAME)
+    social_role = discord.utils.find(lambda r: r.name.lower() == SOCIAL_ROLE_NAME.lower(), guild.roles)
     if not social_role:
         await log_channel.send(f"⚠️ PurrCurity scan: Could not find a role named `{SOCIAL_ROLE_NAME}`.")
         return
