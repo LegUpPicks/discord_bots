@@ -99,7 +99,7 @@ SCAN_TIMES = [
 ]
 
 # Suspicious indicator thresholds for /purrscan
-SCAN_ACCOUNT_AGE_DAYS = 30   # Flag accounts newer than this
+SCAN_ACCOUNT_AGE_DAYS = 14   # Flag accounts newer than this
 SCAN_JOIN_AGE_DAYS    = 7    # Flag members who joined the server within this many days
 SCAN_SUSPICIOUS_KEYWORDS = {
     "picks", "capper", "cappers", "tips", "tipster", "free", "crypto",
@@ -245,9 +245,6 @@ def get_suspicion_flags(member: discord.Member) -> list[str]:
         join_age = (now - member.joined_at).days
         if join_age < SCAN_JOIN_AGE_DAYS:
             flags.append(f"🚪 Joined recently ({join_age}d ago)")
-
-    if str(member.display_avatar) == str(member.default_avatar):
-        flags.append("🖼️ Default avatar (no profile picture)")
 
     name_lower = member.name.lower()
     matched_kw = [kw for kw in SCAN_SUSPICIOUS_KEYWORDS if kw in name_lower]
