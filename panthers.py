@@ -14,6 +14,23 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # List of negative keywords for Panthers fans
 NEGATIVE_KEYWORDS = ["trash", "suck", "sucks", "bad", "garbage", "terrible", "worst", "lose", "loser"]
 
+# Negative sentiment about Michigan
+MICHIGAN_NEGATIVE = [
+    "suck", "sucks", "stink", "stinks", "bad", "trash", "garbage", "terrible",
+    "worst", "hate", "lost", "loses", "lose", "choked", "choke", "overrated",
+    "awful", "pathetic", "boring", "fraud", "frauds", "fraudulent", "dirty",
+    "cheater", "cheaters", "cheat", "down with", "fuck", "screw", "beat",
+    "destroy", "embarrassing", "embarrassment", "joke", "clown", "clowns",
+]
+
+# Positive sentiment about UCONN
+UCONN_POSITIVE = [
+    "go", "great", "good", "amazing", "best", "rules", "love", "rocks",
+    "awesome", "win", "wins", "winning", "forever", "king", "kings",
+    "elite", "goat", "fire", "number one", "#1", "number 1", "champion",
+    "champions", "legit", "real deal", "unbeatable",
+]
+
 @bot.event
 async def on_ready():
     print(f'Bot is online as {bot.user.name}')
@@ -49,10 +66,14 @@ async def on_message(message):
         await message.channel.send("Go birds")
 
     # --- WOLVERINES / MICHIGAN LOGIC ---
-    elif "go uconn" in msg_content or "uconn" in msg_content:
-        await message.channel.send("Fuck you go Wolverines!")
-    elif "michigan sucks" in msg_content or "michigan stinks" in msg_content or "beat michigan" in msg_content or "fuck michigan" in msg_content:
-        await message.channel.send("Fuck you go Wolverines!")
+    elif "michigan" in msg_content:
+        is_michigan_negative = any(word in msg_content for word in MICHIGAN_NEGATIVE)
+        if is_michigan_negative:
+            await message.channel.send("Fuck you go Wolverines!")
+    elif "uconn" in msg_content or "huskies" in msg_content:
+        is_uconn_positive = any(word in msg_content for word in UCONN_POSITIVE)
+        if is_uconn_positive:
+            await message.channel.send("Fuck you go Wolverines!")
 
     await bot.process_commands(message)
 
