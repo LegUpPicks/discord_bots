@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 TOKEN = os.getenv('PURRCURITY_TOKEN') or os.getenv('DISCORD_TOKEN')
@@ -21,6 +21,11 @@ DISCORD_INVITE_PATTERN = re.compile(
 
 TELEGRAM_PATTERN = re.compile(
     r'(t\.me/|telegram\.me/|telegram\.org|@\w{3,}\s*(on|via|at)?\s*telegram)',
+    re.IGNORECASE
+)
+
+URL_PATTERN = re.compile(
+    r'https?://\S+|www\.\S+',
     re.IGNORECASE
 )
 
@@ -42,29 +47,47 @@ _PROMO_PHRASES = [
 
 PROMO_PATTERN = re.compile('|'.join(_PROMO_PHRASES), re.IGNORECASE)
 
-# ─── Configuration (edit these to customize) ──────────────────────────────────
+EMOJI_PATTERN = re.compile(
+    u'[\U0001F300-\U0001FFFF]|[\u2600-\u27BF]',
+    re.UNICODE
+)
+
+# ─── Configuration ────────────────────────────────────────────────────────────
 
 # Role names (case-insensitive) that are EXEMPT from all filters
-EXEMPT_ROLE_NAMES: set[str] = {"admin", "administrator", "moderator", "mod", "staff", "owner"}
+EXEMPT_ROLE_NAMES: set[str] = {"admin", "administrator", "moderator", "mod", "staff", "owner", "verified member"}
 
-# Set to a channel ID integer to enable mod logging, or None to disable
-MOD_LOG_CHANNEL_ID: int | None = None
+# Role name that gets stricter filtering (all links blocked, not just invite links)
+SOCIAL_ROLE_NAME = "social"
+
+# Channel name to post mod logs (matched case-insensitively)
+MOD_LOG_CHANNEL_NAME = "security-management"
 
 # Toggle individual filters on/off at runtime via /purrfilter
 FILTERS: dict[str, bool] = {
-    "discord_links":  True,   # Block Discord invite links
-    "telegram_links": True,   # Block Telegram links / @user on telegram
-    "promo_phrases":  True,   # Block betting promo/spam phrases
-    "spam_mentions":  True,   # Block mass @mentions
-    "caps_spam":      True,   # Block excessive ALL CAPS
-    "repeated_chars": True,   # Block aaaaaaaa / !!!!!!!!! type spam
+    "discord_links":      True,   # Block Discord invite links (all members)
+    "telegram_links":     True,   # Block Telegram links (all members)
+    "promo_phrases":      True,   # Block betting promo/spam phrases (all members)
+    "spam_mentions":      True,   # Block mass @mentions (all members)
+    "caps_spam":          True,   # Block excessive ALL CAPS (all members)
+    "repeated_chars":     True,   # Block aaaaaaa / !!!!! spam (all members)
+    "all_links_social":   True,   # Block ALL URLs for Social role members
+    "emoji_spam":         True,   # Block excessive emojis (all members)
+    "strike_system":      True,   # Auto-timeout after MAX_STRIKES violations
 }
 
 # Thresholds
-CAPS_THRESHOLD = 0.70          # 70%+ of letters are caps → flagged
-CAPS_MIN_LENGTH = 10           # Only check messages with ≥ this many characters
-MAX_MENTIONS = 4               # More than this many @mentions → flagged
-REPEATED_CHAR_MIN = 6          # N+ consecutive identical characters → flagged
+CAPS_THRESHOLD = 0.70
+CAPS_MIN_LENGTH = 10
+MAX_MENTIONS = 4
+REPEATED_CHAR_MIN = 6
+EMOJI_MAX = 8
+NEW_ACCOUNT_DAYS = 7    # Accounts newer than this are flagged in logs
+MAX_STRIKES = 3         # Violations before auto-timeout
+TIMEOUT_MINUTES = 60    # How long the auto-timeout lasts
+
+# ─── Strike Tracking (in-memory, resets on bot restart) ───────────────────────
+strikes: dict[int, int] = {}
 
 # ─── Bot Setup ────────────────────────────────────────────────────────────────
 
@@ -81,15 +104,17 @@ bot = commands.Bot(
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def is_exempt(member: discord.Member) -> bool:
-    """Returns True if the member bypasses all filters."""
     if member.guild_permissions.administrator:
         return True
     member_role_names = {r.name.lower() for r in member.roles}
-    return bool(member_role_names & EXEMPT_ROLE_NAMES)
+    return bool(member_role_names & {r.lower() for r in EXEMPT_ROLE_NAMES})
 
 
-def check_message(content: str) -> list[str]:
-    """Returns a list of human-readable violation reasons for the message content."""
+def has_social_role(member: discord.Member) -> bool:
+    return any(r.name.lower() == SOCIAL_ROLE_NAME.lower() for r in member.roles)
+
+
+def check_message(content: str, member: discord.Member | None = None) -> list[str]:
     violations: list[str] = []
 
     if FILTERS["discord_links"] and DISCORD_INVITE_PATTERN.search(content):
@@ -118,7 +143,29 @@ def check_message(content: str) -> list[str]:
     ):
         violations.append("repeated character spam")
 
+    if FILTERS["emoji_spam"]:
+        emoji_count = len(EMOJI_PATTERN.findall(content))
+        if emoji_count > EMOJI_MAX:
+            violations.append(f"emoji spam ({emoji_count} emojis)")
+
+    # Stricter: block ALL links for Social role members
+    if (
+        FILTERS["all_links_social"]
+        and member is not None
+        and has_social_role(member)
+        and URL_PATTERN.search(content)
+        and not violations  # Only add if not already caught by a stricter rule
+    ):
+        violations.append("links are not permitted for Social members")
+
     return violations
+
+
+def get_mod_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    for channel in guild.text_channels:
+        if channel.name.lower() == MOD_LOG_CHANNEL_NAME.lower():
+            return channel
+    return None
 
 
 async def post_mod_log(
@@ -127,29 +174,39 @@ async def post_mod_log(
     channel: discord.TextChannel,
     content: str,
     reasons: list[str],
+    timed_out: bool = False,
 ) -> None:
-    """Posts a violation embed to the mod log channel if configured."""
-    if MOD_LOG_CHANNEL_ID is None:
-        return
-    log_channel = guild.get_channel(MOD_LOG_CHANNEL_ID)
-    if not isinstance(log_channel, discord.TextChannel):
+    log_channel = get_mod_log_channel(guild)
+    if not log_channel:
         return
 
+    account_age = (datetime.now(timezone.utc) - member.created_at).days
+    is_new_account = account_age < NEW_ACCOUNT_DAYS
+    strike_count = strikes.get(member.id, 0)
+
     embed = discord.Embed(
-        title="PurrCurity — Message Removed",
-        color=discord.Color.orange(),
+        title="PurrCurity — Message Removed" + (" 🔇 Member Timed Out" if timed_out else ""),
+        color=discord.Color.red() if timed_out else discord.Color.orange(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="User", value=f"{member.mention} (`{member}`)", inline=True)
     embed.add_field(name="Channel", value=channel.mention, inline=True)
+    embed.add_field(name="Strikes", value=f"{strike_count}/{MAX_STRIKES}", inline=True)
     embed.add_field(
         name="Violations",
         value="\n".join(f"• {r}" for r in reasons),
         inline=False,
     )
-    # Truncate content preview to 300 chars to avoid embed limits
     preview = content[:300] + ("…" if len(content) > 300 else "")
-    embed.add_field(name="Message Preview", value=f"```{discord.utils.escape_markdown(preview)}```", inline=False)
+    embed.add_field(
+        name="Message Preview",
+        value=f"```{discord.utils.escape_markdown(preview)}```",
+        inline=False,
+    )
+    if is_new_account:
+        embed.add_field(name="⚠️ New Account", value=f"Account is only {account_age} day(s) old", inline=False)
+    if timed_out:
+        embed.add_field(name="Action", value=f"Timed out for {TIMEOUT_MINUTES} minutes after {MAX_STRIKES} violations", inline=False)
     embed.set_footer(text=f"User ID: {member.id}")
     await log_channel.send(embed=embed)
 
@@ -165,16 +222,14 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Ignore DMs and other bots
     if message.author.bot or not isinstance(message.author, discord.Member):
         return
 
-    # Exempt roles/admins pass through
     if is_exempt(message.author):
         await bot.process_commands(message)
         return
 
-    violations = check_message(message.content)
+    violations = check_message(message.content, message.author)
 
     if violations:
         try:
@@ -182,18 +237,37 @@ async def on_message(message: discord.Message):
         except (discord.Forbidden, discord.NotFound):
             pass
 
+        # Update strike count
+        timed_out = False
+        if FILTERS["strike_system"]:
+            strikes[message.author.id] = strikes.get(message.author.id, 0) + 1
+            current_strikes = strikes[message.author.id]
+
+            if current_strikes >= MAX_STRIKES:
+                try:
+                    await message.author.timeout(
+                        timedelta(minutes=TIMEOUT_MINUTES),
+                        reason=f"PurrCurity: {MAX_STRIKES} violations"
+                    )
+                    timed_out = True
+                    strikes[message.author.id] = 0  # Reset after timeout
+                except discord.Forbidden:
+                    pass
+
         reason_str = ", ".join(violations)
+        warning = (
+            f"{message.author.mention} You have been timed out for {TIMEOUT_MINUTES} minutes after repeated violations. 🐾"
+            if timed_out else
+            f"{message.author.mention} Your message was removed by PurrCurity for: **{reason_str}**. "
+            f"({strikes.get(message.author.id, 0)}/{MAX_STRIKES} strikes) 🐾"
+        )
         try:
-            await message.channel.send(
-                f"{message.author.mention} Your message was removed by PurrCurity for: "
-                f"**{reason_str}**. Please keep the server spam-free! 🐾",
-                delete_after=12,
-            )
+            await message.channel.send(warning, delete_after=12)
         except discord.Forbidden:
             pass
 
-        await post_mod_log(message.guild, message.author, message.channel, message.content, violations)
-        return  # Don't process commands on deleted spam messages
+        await post_mod_log(message.guild, message.author, message.channel, message.content, violations, timed_out)
+        return
 
     await bot.process_commands(message)
 
@@ -202,7 +276,6 @@ async def on_message(message: discord.Message):
 @bot.command(name="sync")
 @commands.is_owner()
 async def sync_commands(ctx: commands.Context):
-    """Syncs slash commands to Discord (owner only). Run once after adding new commands."""
     synced = await bot.tree.sync()
     await ctx.send(f"PurrCurity: Synced {len(synced)} command(s). 🐾")
 
@@ -215,7 +288,8 @@ async def purrstatus(interaction: discord.Interaction):
         f"{'✅' if enabled else '❌'}  `{name}`"
         for name, enabled in FILTERS.items()
     ]
-    mod_log_val = f"<#{MOD_LOG_CHANNEL_ID}>" if MOD_LOG_CHANNEL_ID else "*Not configured*"
+    log_channel = get_mod_log_channel(interaction.guild)
+    log_val = log_channel.mention if log_channel else f"*#{MOD_LOG_CHANNEL_NAME} not found*"
     exempt_val = ", ".join(f"`{r}`" for r in sorted(EXEMPT_ROLE_NAMES))
 
     embed = discord.Embed(
@@ -223,17 +297,16 @@ async def purrstatus(interaction: discord.Interaction):
         description="\n".join(lines),
         color=discord.Color.purple(),
     )
-    embed.add_field(name="Mod Log Channel", value=mod_log_val, inline=False)
-    embed.add_field(name="Exempt Role Names", value=exempt_val, inline=False)
-    embed.set_footer(text="Use /purrfilter to toggle filters • /purrlog to set mod log channel")
+    embed.add_field(name="Mod Log Channel", value=log_val, inline=False)
+    embed.add_field(name="Exempt Roles", value=exempt_val, inline=False)
+    embed.add_field(name="Social Role (strict)", value=f"`{SOCIAL_ROLE_NAME}`", inline=True)
+    embed.add_field(name="Strike Limit", value=f"`{MAX_STRIKES}` → {TIMEOUT_MINUTES}min timeout", inline=True)
+    embed.set_footer(text="Use /purrfilter to toggle filters")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="purrfilter", description="Enable or disable a PurrCurity filter.")
-@app_commands.describe(
-    filter_name="Which filter to change",
-    enabled="True to enable, False to disable",
-)
+@app_commands.describe(filter_name="Which filter to change", enabled="True to enable, False to disable")
 @app_commands.choices(filter_name=[app_commands.Choice(name=k, value=k) for k in FILTERS])
 @app_commands.default_permissions(administrator=True)
 async def purrfilter(interaction: discord.Interaction, filter_name: str, enabled: bool):
@@ -243,29 +316,11 @@ async def purrfilter(interaction: discord.Interaction, filter_name: str, enabled
     FILTERS[filter_name] = enabled
     state = "**enabled** ✅" if enabled else "**disabled** ❌"
     await interaction.response.send_message(
-        f"PurrCurity: `{filter_name}` is now {state}. 🐾",
-        ephemeral=True,
+        f"PurrCurity: `{filter_name}` is now {state}. 🐾", ephemeral=True
     )
 
 
-@bot.tree.command(name="purrlog", description="Set or clear the PurrCurity mod log channel.")
-@app_commands.describe(channel="Channel to send mod logs to (leave blank to disable)")
-@app_commands.default_permissions(administrator=True)
-async def purrlog(interaction: discord.Interaction, channel: discord.TextChannel | None = None):
-    global MOD_LOG_CHANNEL_ID
-    if channel is None:
-        MOD_LOG_CHANNEL_ID = None
-        await interaction.response.send_message(
-            "PurrCurity: Mod logging has been **disabled**. 🐾", ephemeral=True
-        )
-    else:
-        MOD_LOG_CHANNEL_ID = channel.id
-        await interaction.response.send_message(
-            f"PurrCurity: Mod logs will be sent to {channel.mention}. 🐾", ephemeral=True
-        )
-
-
-@bot.tree.command(name="purrcheck", description="Manually test whether a message would be caught by PurrCurity.")
+@bot.tree.command(name="purrcheck", description="Test whether a message would be caught by PurrCurity.")
 @app_commands.describe(text="The message text to check")
 @app_commands.default_permissions(manage_messages=True)
 async def purrcheck(interaction: discord.Interaction, text: str):
@@ -279,6 +334,26 @@ async def purrcheck(interaction: discord.Interaction, text: str):
         await interaction.response.send_message(
             "✅ This message **passes** all active filters.", ephemeral=True
         )
+
+
+@bot.tree.command(name="purrstrikes", description="Check how many strikes a member has.")
+@app_commands.describe(member="The member to check")
+@app_commands.default_permissions(manage_messages=True)
+async def purrstrikes(interaction: discord.Interaction, member: discord.Member):
+    count = strikes.get(member.id, 0)
+    await interaction.response.send_message(
+        f"{member.mention} has **{count}/{MAX_STRIKES}** strikes. 🐾", ephemeral=True
+    )
+
+
+@bot.tree.command(name="purrclearstrikes", description="Clear all strikes for a member.")
+@app_commands.describe(member="The member to clear strikes for")
+@app_commands.default_permissions(administrator=True)
+async def purrclearstrikes(interaction: discord.Interaction, member: discord.Member):
+    strikes.pop(member.id, None)
+    await interaction.response.send_message(
+        f"PurrCurity: Strikes cleared for {member.mention}. 🐾", ephemeral=True
+    )
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
