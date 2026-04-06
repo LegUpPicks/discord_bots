@@ -280,7 +280,13 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
         await log_channel.send(f"⚠️ PurrCurity scan: Could not find a role named `{SOCIAL_ROLE_NAME}`.")
         return
 
-    social_members = [m for m in guild.members if social_role in m.roles and not m.bot]
+    verified_role = discord.utils.find(lambda r: r.name.lower() == "verified member", guild.roles)
+    social_members = [
+        m for m in guild.members
+        if social_role in m.roles
+        and not m.bot
+        and (verified_role is None or verified_role not in m.roles)
+    ]
     suspicious = [(m, get_suspicion_flags(m)) for m in social_members]
     suspicious = [
         (m, flags) for m, flags in suspicious
