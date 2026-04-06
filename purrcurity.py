@@ -272,7 +272,10 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
 
     social_members = [m for m in guild.members if social_role in m.roles and not m.bot]
     suspicious = [(m, get_suspicion_flags(m)) for m in social_members]
-    suspicious = [(m, flags) for m, flags in suspicious if flags]
+    suspicious = [
+        (m, flags) for m, flags in suspicious
+        if any("New account" in f for f in flags) and any("Joined recently" in f for f in flags)
+    ]
 
     now_et = datetime.now(ET).strftime("%b %d, %Y %I:%M %p ET")
 
