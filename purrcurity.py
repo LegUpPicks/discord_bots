@@ -364,6 +364,22 @@ async def scheduled_scan():
         await run_scan(guild, triggered_by="Scheduled auto-scan")
 
 
+def build_welcome_message(guild: discord.Guild) -> str:
+    def channel_mention(name: str) -> str:
+        ch = discord.utils.find(lambda c: c.name.lower() == name.lower(), guild.text_channels)
+        return ch.mention if ch else f"#{name}"
+
+    welcome_ch = channel_mention("👋丨welcome")
+    scam_ch = channel_mention("🚨丨spot-fake-profiles")
+
+    return (
+        f"Welcome to LegUpPicks! Please read {welcome_ch} before beginning.  Happy to have you in our free discord "
+        f"where we will do our best to educate and help you build your bankroll.\n\n"
+        f"We don't recommend joining premium unless your unit size is at least $10, and as always you can get "
+        f"a 3-day free trial here - https://whop.com/c/leguppicks/discord\n\n"
+        f"Be aware of imposters, I will never DM you.  See {scam_ch} for what phishing scams look like"
+    )
+
 # ─── Events ───────────────────────────────────────────────────────────────────
 
 @bot.event
@@ -377,7 +393,31 @@ async def on_ready():
 
 
 @bot.event
+async def on_member_join(member: discord.Member):
+    try:
+        await member.send(build_welcome_message(member.guild))
+    except (discord.Forbidden, discord.HTTPException):
+        pass  # DMs disabled — skip silently
+
+
+@bot.event
 async def on_message(message: discord.Message):
+    # Forward DM replies to #security-management
+    if isinstance(message.channel, discord.DMChannel) and not message.author.bot:
+        for guild in bot.guilds:
+            log_channel = get_mod_log_channel(guild)
+            if log_channel:
+                embed = discord.Embed(
+                    title="DM Reply Received",
+                    description=message.content,
+                    color=discord.Color.blurple(),
+                    timestamp=message.created_at,
+                )
+                embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
+                embed.set_footer(text=f"User ID: {message.author.id}")
+                await log_channel.send(embed=embed)
+        return
+
     if message.author.bot or not isinstance(message.author, discord.Member):
         return
 
