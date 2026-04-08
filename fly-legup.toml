@@ -1,0 +1,14 @@
+# fly-legup.toml — LegUp Announcement Emailer Bot
+
+app = 'legup-announce'
+primary_region = 'ord'
+
+[build]
+
+[processes]
+  worker = "python legup_announce.py"
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
