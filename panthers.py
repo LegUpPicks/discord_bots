@@ -61,6 +61,16 @@ async def on_message(message):
         else:
             await message.channel.send("KEEP POUNDING")
 
+    # --- HEAT / MIAMI LOGIC ---
+    elif "heat" in msg_content or "miami" in msg_content:
+        await message.channel.send("Fuck you Buzz Buzz bitch GO HORNETS")
+
+    # --- HORNETS LOGIC (positive only) ---
+    elif "hornets" in msg_content:
+        is_hornets_positive = any(word in msg_content for word in UCONN_POSITIVE) or "go hornets" in msg_content or "buzz" in msg_content
+        if is_hornets_positive:
+            await message.channel.send("Buzz Buzz lets GO!")
+
     # --- EAGLES / GO BIRDS LOGIC ---
     elif "eagles" in msg_content or "go birds" in msg_content:
         await message.channel.send("Go birds")
