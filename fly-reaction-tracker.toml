@@ -1,12 +1,12 @@
-# fly-legup.toml — LegUp Announcement Emailer Bot
+# fly-reaction-tracker.toml — Reaction Tracker Discord Bot
 
-app = 'legup-announce'
+app = 'reaction-tracker'
 primary_region = 'ord'
 
 [build]
 
 [processes]
-  worker = "python legup_announce.py"
+  worker = "python reaction_tracker.py"
 
 [[vm]]
   memory = '256mb'

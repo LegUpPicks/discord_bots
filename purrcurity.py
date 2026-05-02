@@ -101,6 +101,9 @@ SCAN_TIMES = [
 # Suspicious indicator thresholds for /purrscan
 SCAN_ACCOUNT_AGE_DAYS = 14   # Flag accounts newer than this
 SCAN_JOIN_AGE_DAYS    = 7    # Flag members who joined the server within this many days
+
+# Auto-kick threshold for on_member_join (Social role members with brand-new accounts)
+JOIN_KICK_ACCOUNT_AGE_DAYS = 3
 SCAN_SUSPICIOUS_KEYWORDS = {
     "picks", "capper", "cappers", "tips", "tipster", "free", "crypto",
     "nft", "invest", "profit", "winner", "money", "cash", "promo",
@@ -266,8 +269,10 @@ def get_suspicion_flags(member: discord.Member) -> list[str]:
 
 KICK_DM_MESSAGE = (
     "Your account does not meet the criteria to join this server either for suspicious activity or account age. "
-    "Please try to join once your discord account is of a more mature status, as always you can join premium "
-    "where there are no restrictions via Whop: https://whop.com/c/leguppicks/discord"
+    "Please try to join once your discord account is of a more mature status.\n\n"
+    "In the meantime, you can join our free Whop community here: https://whop.com/leguppicks/legup-picks-free/\n\n"
+    "Or, if you'd like to skip the restrictions, you can join premium via Whop: https://whop.com/c/leguppicks/discord\n\n"
+    "If you believe this was an error please message back \"help\" and an admin will assist you."
 )
 
 
@@ -301,6 +306,20 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
         )
     ]
 
+    # Find and fix members with no roles (only @everyone)
+    roleless = [
+        m for m in guild.members
+        if not m.bot
+        and len(m.roles) == 1  # only @everyone
+    ]
+    assigned, assign_failed = 0, 0
+    for m in roleless:
+        try:
+            await m.add_roles(social_role, reason="PurrCurity: assigned missing Social role")
+            assigned += 1
+        except (discord.Forbidden, discord.HTTPException):
+            assign_failed += 1
+
     now_et = datetime.now(ET).strftime("%b %d, %Y %I:%M %p ET")
 
     header = discord.Embed(
@@ -309,12 +328,20 @@ async def run_scan(guild: discord.Guild, triggered_by: str = "Scheduled") -> Non
             f"**Triggered by:** {triggered_by}\n"
             f"**Time:** {now_et}\n\n"
             f"**Total Social members:** {len(social_members)}\n"
-            f"**Flagged as suspicious:** {len(suspicious)}"
+            f"**Flagged as suspicious:** {len(suspicious)}\n"
+            f"**Roleless members fixed:** {assigned}"
+            + (f" (❌ {assign_failed} failed)" if assign_failed else "")
         ),
         color=discord.Color.yellow() if suspicious else discord.Color.green(),
         timestamp=datetime.now(timezone.utc),
     )
     await log_channel.send(embed=header)
+
+    if roleless:
+        names = ", ".join(str(m) for m in roleless[:20])
+        if len(roleless) > 20:
+            names += f" and {len(roleless) - 20} more"
+        await log_channel.send(f"🔧 Assigned Social role to **{len(roleless)}** member(s) who had no roles: {names}")
 
     if not suspicious:
         await log_channel.send("✅ No suspicious Social members found.")
@@ -394,6 +421,47 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+
+    flags = get_suspicion_flags(member)
+    account_age_days = (datetime.now(timezone.utc) - member.created_at).days
+    is_suspicious = (
+        account_age_days < JOIN_KICK_ACCOUNT_AGE_DAYS
+        or any("impersonation" in f for f in flags)
+    )
+
+    if is_suspicious:
+        try:
+            await member.send(KICK_DM_MESSAGE)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        try:
+            await member.kick(reason="PurrCurity: suspicious activity or account age on join")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        log_channel = get_mod_log_channel(member.guild)
+        if log_channel:
+            embed = discord.Embed(
+                title="PurrCurity — Auto-Kicked on Join",
+                description=f"{member.mention} (`{member}`) was kicked automatically on join.",
+                color=discord.Color.red(),
+                timestamp=datetime.now(timezone.utc),
+            )
+            embed.add_field(name="Flags", value="\n".join(flags), inline=False)
+            embed.set_footer(text=f"User ID: {member.id}")
+            await log_channel.send(embed=embed)
+        return
+
+    # Auto-assign Social role
+    social_role = discord.utils.find(lambda r: r.name.lower() == SOCIAL_ROLE_NAME.lower(), member.guild.roles)
+    if social_role:
+        try:
+            await member.add_roles(social_role, reason="PurrCurity: auto-assigned on join")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    # Send welcome DM
     try:
         await member.send(build_welcome_message(member.guild))
     except (discord.Forbidden, discord.HTTPException):
@@ -404,17 +472,20 @@ async def on_member_join(member: discord.Member):
 async def on_message(message: discord.Message):
     # Forward DM replies to #security-management
     if isinstance(message.channel, discord.DMChannel) and not message.author.bot:
+        is_help = message.content.strip().lower() == "help"
         for guild in bot.guilds:
             log_channel = get_mod_log_channel(guild)
             if log_channel:
                 embed = discord.Embed(
-                    title="DM Reply Received",
+                    title="⚠️ Kicked Member Requesting Help" if is_help else "DM Reply Received",
                     description=message.content,
-                    color=discord.Color.blurple(),
+                    color=discord.Color.red() if is_help else discord.Color.blurple(),
                     timestamp=message.created_at,
                 )
                 embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
                 embed.set_footer(text=f"User ID: {message.author.id}")
+                if is_help:
+                    embed.add_field(name="Action Required", value="This user was auto-kicked and is requesting admin review.", inline=False)
                 await log_channel.send(embed=embed)
         return
 
@@ -551,10 +622,10 @@ async def purrclearstrikes(interaction: discord.Interaction, member: discord.Mem
         f"PurrCurity: Strikes cleared for {member.mention}. 🐾", ephemeral=True
     )
 
-@bot.tree.command(name="purrscan", description="Scan Social role members, post CSV report, and kick flagged members.")
+@bot.tree.command(name="purrscan", description="Scan members for suspicious activity, fix missing roles, and kick flagged accounts.")
 @app_commands.default_permissions(administrator=True)
 async def purrscan(interaction: discord.Interaction):
-    await interaction.response.send_message("PurrCurity: Scanning and kicking Social members... report will appear in #security-management. 🐾", ephemeral=True)
+    await interaction.response.send_message("PurrCurity: Running scan... report will appear in #security-management. 🐾", ephemeral=True)
     await run_scan(interaction.guild, triggered_by=f"Manual scan by {interaction.user}")
 
 # ─── Run ──────────────────────────────────────────────────────────────────────

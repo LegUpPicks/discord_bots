@@ -12,6 +12,9 @@
 
 import os
 import asyncio
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
 import httpx
 import discord
 from dotenv import load_dotenv
@@ -31,6 +34,7 @@ client = discord.Client(intents=intents)
 
 ANNOUNCE_AUTHOR = "dennythedonkey"
 SUBJECT = "LegUp Plays"
+LOCAL_TZ = ZoneInfo("America/Chicago")
 
 
 @client.event
@@ -46,19 +50,26 @@ async def on_message(message: discord.Message):
     if message.author.name.lower() != ANNOUNCE_AUTHOR.lower():
         return
 
-    subject = SUBJECT
+    msg_local = message.created_at.astimezone(LOCAL_TZ)
+    day_start = datetime.combine(msg_local.date(), time.min, tzinfo=LOCAL_TZ)
+    round_num = 1
+    async for prior in message.channel.history(after=day_start, before=message, limit=100):
+        if prior.author.name.lower() == ANNOUNCE_AUTHOR.lower():
+            round_num += 1
+
+    subject = SUBJECT if round_num == 1 else f"{SUBJECT} — Round {round_num}"
     body    = message.content
 
     print(f"Announcement detected from {message.author}: {subject!r}")
 
     url = f"{APP_URL}/api/announce?secret={SECRET}"
     try:
-        async with httpx.AsyncClient(timeout=30) as http:
+        async with httpx.AsyncClient(timeout=300) as http:
             resp = await http.post(url, json={"subject": subject, "body": body})
             resp.raise_for_status()
             data = resp.json()
-        print(f"Emails sent: {data.get('sent')} ok, {data.get('failed')} failed")
-        await message.add_reaction("✅")
+        print(f"Announce queued: {data}")
+        await message.add_reaction("🫏")
     except Exception as e:
         print(f"ERROR calling /api/announce: {e}")
         await message.add_reaction("❌")
