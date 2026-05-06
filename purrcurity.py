@@ -58,7 +58,13 @@ EMOJI_PATTERN = re.compile(
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 # Role names (case-insensitive) that are EXEMPT from all filters
-EXEMPT_ROLE_NAMES: set[str] = {"admin", "administrator", "moderator", "mod", "staff", "owner", "verified member"}
+EXEMPT_ROLE_NAMES: set[str] = {"admin", "administrator", "moderator", "mod", "staff", "owner", "verified member", "community star"}
+
+# Specific Discord user IDs that are EXEMPT from all filters (most reliable — IDs never change)
+EXEMPT_USER_IDS: set[int] = set()
+
+# Specific Discord usernames (case-insensitive) that are EXEMPT from all filters
+EXEMPT_USERNAMES: set[str] = {"ecualum2003"}
 
 # Role name that gets stricter filtering (all links blocked, not just invite links)
 SOCIAL_ROLE_NAME = "social"
@@ -134,6 +140,10 @@ bot = commands.Bot(
 
 def is_exempt(member: discord.Member) -> bool:
     if member.guild_permissions.administrator:
+        return True
+    if member.id in EXEMPT_USER_IDS:
+        return True
+    if member.name.lower() in {u.lower() for u in EXEMPT_USERNAMES}:
         return True
     member_role_names = {r.name.lower() for r in member.roles}
     return bool(member_role_names & {r.lower() for r in EXEMPT_ROLE_NAMES})
@@ -402,8 +412,6 @@ def build_welcome_message(guild: discord.Guild) -> str:
     return (
         f"Welcome to LegUpPicks! Please read {welcome_ch} before beginning.  Happy to have you in our free discord "
         f"where we will do our best to educate and help you build your bankroll.\n\n"
-        f"We don't recommend joining premium unless your unit size is at least $10, and as always you can get "
-        f"a 3-day free trial here - https://whop.com/c/leguppicks/discord\n\n"
         f"Be aware of imposters, I will never DM you.  See {scam_ch} for what phishing scams look like"
     )
 
